@@ -21,12 +21,12 @@ func NewMessageHandler() MessageHandler {
 }
 
 func (messageHandler *MessageHandler) SerializeDataMessage(fruitRecord fruititem.FruitItem) (*middleware.Message, error) {
-	header := fruititem.FruitItem{
-		Fruit:  "",
+	client := fruititem.FruitItem{
+		Fruit:  "CLIENT",
 		Amount: messageHandler.id,
 	}
 
-	data := []fruititem.FruitItem{header, fruitRecord}
+	data := []fruititem.FruitItem{client, fruitRecord}
 	return inner.SerializeMessage(data)
 }
 
@@ -35,7 +35,6 @@ func (messageHandler *MessageHandler) SerializeEOFMessage() (*middleware.Message
 		Fruit:  "EOF",
 		Amount: messageHandler.id,
 	}
-
 	data := []fruititem.FruitItem{header}
 	return inner.SerializeMessage(data)
 }

@@ -23,6 +23,8 @@ type AggregationConfig struct {
 }
 
 type Aggregation struct {
+	sumAmount     int
+	eofByClient   map[uint32]int
 	outputQueue   middleware.Middleware
 	inputExchange middleware.Middleware
 	fruitItemMap  map[uint32]map[string]fruititem.FruitItem
@@ -45,6 +47,8 @@ func NewAggregation(config AggregationConfig) (*Aggregation, error) {
 	}
 
 	return &Aggregation{
+		eofByClient:   map[uint32]int{},
+		sumAmount:     config.SumAmount,
 		outputQueue:   outputQueue,
 		inputExchange: inputExchange,
 		fruitItemMap:  map[uint32]map[string]fruititem.FruitItem{},
@@ -71,9 +75,14 @@ func (aggregation *Aggregation) handleMessage(msg middleware.Message, ack func()
 	clientId := header.Amount
 
 	if header.Fruit == "EOF" {
-		if err := aggregation.handleEndOfRecordsMessage(clientId); err != nil {
-			slog.Error("While handling end of record message", "err", err)
+		aggregation.eofByClient[clientId]++
+
+		if aggregation.eofByClient[clientId] == aggregation.sumAmount {
+			if err := aggregation.handleEndOfRecordsMessage(clientId); err != nil {
+				slog.Error("While handling end of record message", "err", err)
+			}
 		}
+
 		return
 	}
 
@@ -81,7 +90,7 @@ func (aggregation *Aggregation) handleMessage(msg middleware.Message, ack func()
 }
 
 func (aggregation *Aggregation) handleEndOfRecordsMessage(clientId uint32) error {
-	slog.Info("Received End Of Records message")
+	slog.Info("Received End Of Records message", "clientId", clientId)
 
 	fruitTopRecords := aggregation.buildFruitTop(clientId)
 	message, err := inner.SerializeMessage(fruitTopRecords)
@@ -111,6 +120,8 @@ func (aggregation *Aggregation) handleDataMessage(clientId uint32, fruitRecords 
 	if _, ok := aggregation.fruitItemMap[clientId]; !ok {
 		aggregation.fruitItemMap[clientId] = map[string]fruititem.FruitItem{}
 	}
+
+	slog.Info("Received data message", "clientId", clientId, "fruitRecords", fruitRecords)
 
 	for _, fruitRecord := range fruitRecords {
 		if _, ok := aggregation.fruitItemMap[clientId][fruitRecord.Fruit]; ok {
