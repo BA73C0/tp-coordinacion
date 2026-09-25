@@ -11,22 +11,29 @@ import (
 var ops atomic.Uint32
 
 type MessageHandler struct {
-	id uint32
+	id      uint32
+	counter uint32
 }
 
 func NewMessageHandler() MessageHandler {
 	return MessageHandler{
-		id: ops.Add(1),
+		id:      ops.Add(1),
+		counter: 0,
 	}
 }
 
 func (messageHandler *MessageHandler) SerializeDataMessage(fruitRecord fruititem.FruitItem) (*middleware.Message, error) {
 	client := fruititem.FruitItem{
-		Fruit:  "CLIENT",
+		Fruit:  "CLIENT_ID",
 		Amount: messageHandler.id,
 	}
+	msgId := fruititem.FruitItem{
+		Fruit:  "MSG_ID",
+		Amount: messageHandler.counter,
+	}
+	messageHandler.counter++
 
-	data := []fruititem.FruitItem{client, fruitRecord}
+	data := []fruititem.FruitItem{client, msgId, fruitRecord}
 	return inner.SerializeMessage(data)
 }
 
@@ -35,7 +42,13 @@ func (messageHandler *MessageHandler) SerializeEOFMessage() (*middleware.Message
 		Fruit:  "EOF",
 		Amount: messageHandler.id,
 	}
-	data := []fruititem.FruitItem{header}
+	msgId := fruititem.FruitItem{
+		Fruit:  "MSG_ID",
+		Amount: messageHandler.counter,
+	}
+	messageHandler.counter++
+
+	data := []fruititem.FruitItem{header, msgId}
 	return inner.SerializeMessage(data)
 }
 

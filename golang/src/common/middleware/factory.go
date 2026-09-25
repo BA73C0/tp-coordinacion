@@ -176,7 +176,6 @@ func (q MiddlewareImplementation) StopConsuming() error {
 // Si ocurre un error interno que no puede resolverse devuelve ErrMessageMiddlewareMessage.
 func (q MiddlewareImplementation) Send(msg Message) error {
 	for _, key := range q.keys {
-
 		// Cuando se publica en el exchange default ("")
 		// hay que usar el nombre de la cola como routing key
 		key_name := key
@@ -202,6 +201,31 @@ func (q MiddlewareImplementation) Send(msg Message) error {
 		} else if err != nil {
 			return ErrMessageMiddlewareMessage
 		}
+	}
+
+	return nil
+}
+
+// Envía un mensaje a la cola o a los tópicos con el que se inicializó el exchange.
+// Si se pierde la conexión con el middleware devuelve ErrMessageMiddlewareDisconnected.
+// Si ocurre un error interno que no puede resolverse devuelve ErrMessageMiddlewareMessage.
+func (q MiddlewareImplementation) SendTo(msg Message, routeKey string) error {
+	err := q.ch.Publish(
+		q.exchange, // exchange
+		routeKey,   // key
+		false,      // mandatory
+		false,      // immediate
+		amqp.Publishing{
+			DeliveryMode: amqp.Transient,
+			Timestamp:    time.Now(),
+			ContentType:  "text/plain",
+			Body:         []byte(msg.Body),
+		},
+	)
+	if errors.Is(err, amqp.ErrClosed) {
+		return ErrMessageMiddlewareDisconnected
+	} else if err != nil {
+		return ErrMessageMiddlewareMessage
 	}
 
 	return nil
