@@ -49,6 +49,12 @@ func sendMsg(mom middleware.Middleware, routeKeys []string, msg []fruititem.Frui
 }
 
 func (sum *Sum) coordinateEndOfRecords(clientId uint32) error {
+
+	if sum.sumAmount == 1 {
+		slog.Info("Only one sum, no need to coordinate end of records", "clientId", clientId)
+		return sum.handleConfirmedCoordMsg(clientId)
+	}
+
 	slog.Info("Notifying end of records to other sums", "clientId", clientId)
 
 	header := fruititem.FruitItem{
