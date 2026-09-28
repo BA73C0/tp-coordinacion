@@ -2,6 +2,7 @@ package sum
 
 import (
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"maps"
 	"time"
@@ -30,6 +31,12 @@ const (
 	ClientIdPos     CoordinationMsgPos = 1
 	ReceivedMsgsPos CoordinationMsgPos = 2
 )
+
+func hash(s string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(s))
+	return h.Sum32()
+}
 
 func sendMsg(mom middleware.Middleware, routeKeys []string, msg []fruititem.FruitItem) error {
 	message, err := inner.SerializeMessage(msg)
@@ -205,16 +212,17 @@ func (sum *Sum) handleConfirmedCoordMsg(clientId uint32) error {
 	mapClone := maps.Clone(sum.fruitItemMap[clientId])
 	sum.mutex.Unlock()
 
-	keys := []string{"aggregation_0"}
-
-	for key := range mapClone {
+	for fruit := range mapClone {
 		header := fruititem.FruitItem{
 			Fruit:  string(ClientId),
 			Amount: clientId,
 		}
 
-		fruitRecord := []fruititem.FruitItem{header, mapClone[key]}
-		if err := sendMsg(sum.outputExchange, keys, fruitRecord); err != nil {
+		fruitRecord := []fruititem.FruitItem{header, mapClone[fruit]}
+
+		key := []string{sum.getAggregationRouteKey(clientId, fruit)}
+
+		if err := sendMsg(sum.outputExchange, key, fruitRecord); err != nil {
 			slog.Debug("While sending fruits to aggregation", "err", err)
 			return err
 		}
@@ -226,7 +234,7 @@ func (sum *Sum) handleConfirmedCoordMsg(clientId uint32) error {
 	}
 
 	eofMessage := []fruititem.FruitItem{header}
-	if err := sendMsg(sum.outputExchange, keys, eofMessage); err != nil {
+	if err := sendMsg(sum.outputExchange, sum.aggregationKeys, eofMessage); err != nil {
 		slog.Debug("While sending EOF message to aggregation", "err", err)
 		return err
 	}
@@ -237,4 +245,10 @@ func (sum *Sum) handleConfirmedCoordMsg(clientId uint32) error {
 	sum.mutex.Unlock()
 
 	return nil
+}
+
+func (sum *Sum) getAggregationRouteKey(clientId uint32, fruitName string) string {
+	hashValue := hash(fmt.Sprintf("%d_%s", clientId, fruitName))
+
+	return sum.aggregationKeys[hashValue%uint32(len(sum.aggregationKeys))]
 }

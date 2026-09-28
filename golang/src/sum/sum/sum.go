@@ -22,17 +22,18 @@ type SumConfig struct {
 }
 
 type Sum struct {
-	id             int
-	mutex          sync.Mutex
-	sumPrefix      string
-	sumAmount      int
-	coordExchange  middleware.Middleware
-	inputQueue     middleware.Middleware
-	outputExchange middleware.Middleware
-	counterAck     map[uint32]uint32
-	counterClient  map[uint32]uint32
-	lastClientMsg  map[uint32]uint32
-	fruitItemMap   map[uint32]map[string]fruititem.FruitItem
+	id              int
+	mutex           sync.Mutex
+	sumPrefix       string
+	sumAmount       int
+	coordExchange   middleware.Middleware
+	inputQueue      middleware.Middleware
+	outputExchange  middleware.Middleware
+	aggregationKeys []string
+	counterAck      map[uint32]uint32
+	counterClient   map[uint32]uint32
+	lastClientMsg   map[uint32]uint32
+	fruitItemMap    map[uint32]map[string]fruititem.FruitItem
 }
 
 const coordExchangeName = "sum_coord_exchange"
@@ -65,17 +66,18 @@ func NewSum(config SumConfig) (*Sum, error) {
 	}
 
 	return &Sum{
-		id:             config.Id,
-		mutex:          sync.Mutex{},
-		sumPrefix:      config.SumPrefix,
-		sumAmount:      config.SumAmount,
-		inputQueue:     inputQueue,
-		coordExchange:  coordExchange,
-		outputExchange: outputExchange,
-		counterAck:     map[uint32]uint32{},
-		counterClient:  map[uint32]uint32{},
-		lastClientMsg:  map[uint32]uint32{},
-		fruitItemMap:   map[uint32]map[string]fruititem.FruitItem{},
+		id:              config.Id,
+		mutex:           sync.Mutex{},
+		sumPrefix:       config.SumPrefix,
+		sumAmount:       config.SumAmount,
+		inputQueue:      inputQueue,
+		coordExchange:   coordExchange,
+		outputExchange:  outputExchange,
+		aggregationKeys: outputExchangeRouteKeys,
+		counterAck:      map[uint32]uint32{},
+		counterClient:   map[uint32]uint32{},
+		lastClientMsg:   map[uint32]uint32{},
+		fruitItemMap:    map[uint32]map[string]fruititem.FruitItem{},
 	}, nil
 }
 

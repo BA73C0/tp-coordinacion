@@ -24,9 +24,9 @@ type AggregationConfig struct {
 
 type Aggregation struct {
 	sumAmount     int
-	eofByClient   map[uint32]int
 	outputQueue   middleware.Middleware
 	inputExchange middleware.Middleware
+	eofByClient   map[uint32]int
 	fruitItemMap  map[uint32]map[string]fruititem.FruitItem
 	topSize       int
 }
@@ -103,7 +103,12 @@ func (aggregation *Aggregation) handleEndOfRecordsMessage(clientId uint32) error
 		return err
 	}
 
-	eofMessage := []fruititem.FruitItem{}
+	header := fruititem.FruitItem{
+		Fruit:  "EOF",
+		Amount: clientId,
+	}
+
+	eofMessage := []fruititem.FruitItem{header}
 	message, err = inner.SerializeMessage(eofMessage)
 	if err != nil {
 		slog.Debug("While serializing EOF message", "err", err)
@@ -141,5 +146,11 @@ func (aggregation *Aggregation) buildFruitTop(clientId uint32) []fruititem.Fruit
 		return fruitItems[j].Less(fruitItems[i])
 	})
 	finalTopSize := min(aggregation.topSize, len(fruitItems))
-	return fruitItems[:finalTopSize]
+
+	header := fruititem.FruitItem{
+		Fruit:  "ClientId",
+		Amount: clientId,
+	}
+	top := []fruititem.FruitItem{header}
+	return append(top, fruitItems[:finalTopSize]...)
 }
