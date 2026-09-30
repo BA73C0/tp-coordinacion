@@ -1,6 +1,7 @@
 package sum
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log/slog"
@@ -56,7 +57,6 @@ func sendMsg(mom middleware.Middleware, routeKeys []string, msg []fruititem.Frui
 }
 
 func (sum *Sum) coordinateEndOfRecords(clientId uint32) error {
-
 	if sum.sumAmount == 1 {
 		slog.Info("Only one sum, no need to coordinate end of records", "clientId", clientId)
 		return sum.handleConfirmedCoordMsg(clientId)
@@ -90,29 +90,37 @@ func (sum *Sum) coordinateEndOfRecords(clientId uint32) error {
 }
 
 func (sum *Sum) handleCoordinationMessage(msg middleware.Message, ack func(), nack func()) {
-	defer ack()
-
 	fruitRecords, _, err := inner.DeserializeMessage(&msg)
 	if err != nil {
 		slog.Error("While deserializing coordination message", "err", err)
+		nack()
 		return
 	}
 
+	err = nil
 	header := fruitRecords[HeaderPos]
 	msgType := header.Fruit
 	coordinatorId := header.Amount
 
 	switch msgType {
 	case string(ReceivedEOF):
-		sum.handleReceivedCoordMsg(fruitRecords, coordinatorId)
+		err = sum.handleReceivedCoordMsg(fruitRecords, coordinatorId)
 	case string(Ack):
-		sum.handleAckCoordMsg(fruitRecords, coordinatorId)
+		err = sum.handleAckCoordMsg(fruitRecords, coordinatorId)
 	case string(Confirmed):
 		clientId := fruitRecords[ClientIdPos].Amount
-		sum.handleConfirmedCoordMsg(clientId)
+		err = sum.handleConfirmedCoordMsg(clientId)
 	default:
 		slog.Debug("Unknown coordination message type", "type", msgType)
 	}
+
+	if err != nil {
+		slog.Error("While handling coordination message", "err", err)
+		nack()
+		return
+	}
+
+	ack()
 }
 
 func (sum *Sum) handleReceivedCoordMsg(msgs []fruititem.FruitItem, coordinatorId uint32) error {
@@ -196,9 +204,15 @@ func (sum *Sum) handleAckCoordMsg(msgs []fruititem.FruitItem, coordinatorId uint
 			return nil
 		}
 
+		sum.routines.Add(1)
 		go func() {
+			defer sum.routines.Add(-1)
+
 			time.Sleep(SleepTime * time.Second)
-			sum.coordinateEndOfRecords(clientId)
+			err := sum.coordinateEndOfRecords(clientId)
+			if err != nil && (sum.running.Load() || (!sum.running.Load() && !errors.Is(err, middleware.ErrMessageMiddlewareDisconnected))) {
+				slog.Error("While coordinating end of records", "err", err)
+			}
 		}()
 	}
 

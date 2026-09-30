@@ -1,9 +1,15 @@
 package aggregation
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"os/signal"
 	"sort"
+	"sync"
+	"sync/atomic"
+	"syscall"
 
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/fruititem"
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/messageprotocol/inner"
@@ -23,6 +29,9 @@ type AggregationConfig struct {
 }
 
 type Aggregation struct {
+	id            int
+	running       atomic.Bool
+	routines      sync.WaitGroup
 	sumAmount     int
 	outputQueue   middleware.Middleware
 	inputExchange middleware.Middleware
@@ -46,24 +55,45 @@ func NewAggregation(config AggregationConfig) (*Aggregation, error) {
 		return nil, err
 	}
 
-	return &Aggregation{
+	aggregation := &Aggregation{
+		id:            config.Id,
+		routines:      sync.WaitGroup{},
 		eofByClient:   map[uint32]int{},
 		sumAmount:     config.SumAmount,
 		outputQueue:   outputQueue,
 		inputExchange: inputExchange,
 		fruitItemMap:  map[uint32]map[string]fruititem.FruitItem{},
 		topSize:       config.TopSize,
-	}, nil
+	}
+	aggregation.running.Store(true)
+	return aggregation, nil
 }
 
 func (aggregation *Aggregation) Run() {
-	aggregation.inputExchange.StartConsuming(func(msg middleware.Message, ack, nack func()) {
-		aggregation.handleMessage(msg, ack, nack)
-	})
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM)
+
+	aggregation.routines.Add(1)
+
+	go func() {
+		defer aggregation.routines.Add(-1)
+		err := aggregation.inputExchange.StartConsuming(func(msg middleware.Message, ack, nack func()) {
+			aggregation.handleMessage(msg, ack, nack)
+		})
+		if err != nil && (aggregation.running.Load() || (!aggregation.running.Load() && !errors.Is(err, middleware.ErrMessageMiddlewareDisconnected))) {
+			slog.Error("While starting input exchange consumption", "err", err)
+		}
+	}()
+
+	slog.Info("Aggregation is running", "id", aggregation.id)
+	<-signals
+	aggregation.Close()
 }
 
 func (aggregation *Aggregation) handleMessage(msg middleware.Message, ack func(), nack func()) {
 	defer ack()
+
+	slog.Info("003")
 
 	fruitRecords, _, err := inner.DeserializeMessage(&msg)
 	if err != nil {
@@ -153,4 +183,26 @@ func (aggregation *Aggregation) buildFruitTop(clientId uint32) []fruititem.Fruit
 	}
 	top := []fruititem.FruitItem{header}
 	return append(top, fruitItems[:finalTopSize]...)
+}
+
+func (aggregation *Aggregation) Close() {
+	slog.Info("Closing aggregation")
+	aggregation.running.Store(false)
+
+	err := aggregation.inputExchange.StopConsuming()
+	if err != nil && !errors.Is(err, middleware.ErrMessageMiddlewareDisconnected) {
+		slog.Error("While stopping input queue consumption", "err", err)
+	}
+
+	// Espero a que terminen de procesar los mensajes que estaban en curso
+	aggregation.routines.Wait()
+
+	err = aggregation.inputExchange.Close()
+	if err != nil && !errors.Is(err, middleware.ErrMessageMiddlewareDisconnected) {
+		slog.Error("While closing input queue", "err", err)
+	}
+	err = aggregation.outputQueue.Close()
+	if err != nil && !errors.Is(err, middleware.ErrMessageMiddlewareDisconnected) {
+		slog.Error("While closing coordination exchange", "err", err)
+	}
 }

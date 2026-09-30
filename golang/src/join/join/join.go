@@ -1,7 +1,13 @@
 package join
 
 import (
+	"errors"
 	"log/slog"
+	"os"
+	"os/signal"
+	"sync"
+	"sync/atomic"
+	"syscall"
 
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/fruititem"
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/messageprotocol/inner"
@@ -21,6 +27,8 @@ type JoinConfig struct {
 }
 
 type Join struct {
+	running           atomic.Bool
+	routines          sync.WaitGroup
 	topSize           int
 	eofByClient       map[uint32]int
 	aggregationAmount int
@@ -45,20 +53,37 @@ func NewJoin(config JoinConfig) (*Join, error) {
 		return nil, err
 	}
 
-	return &Join{
+	join := &Join{
+		routines:          sync.WaitGroup{},
 		topSize:           config.TopSize,
 		eofByClient:       map[uint32]int{},
 		aggregationAmount: config.AggregationAmount,
 		inputQueue:        inputQueue,
 		outputQueue:       outputQueue,
 		topFruitPerClient: make(map[uint32]*Heap),
-	}, nil
+	}
+	join.running.Store(true)
+	return join, nil
 }
 
 func (join *Join) Run() {
-	join.inputQueue.StartConsuming(func(msg middleware.Message, ack, nack func()) {
-		join.handleMessage(msg, ack, nack)
-	})
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM)
+
+	join.routines.Add(1)
+	go func() {
+		defer join.routines.Add(-1)
+		err := join.inputQueue.StartConsuming(func(msg middleware.Message, ack, nack func()) {
+			join.handleMessage(msg, ack, nack)
+		})
+		if err != nil && (join.running.Load() || (!join.running.Load() && !errors.Is(err, middleware.ErrMessageMiddlewareDisconnected))) {
+			slog.Error("While starting input queue consumption", "err", err)
+		}
+	}()
+
+	slog.Info("Join is running")
+	<-signals
+	join.Close()
 }
 
 func (join *Join) handleMessage(msg middleware.Message, ack func(), nack func()) {
@@ -127,4 +152,26 @@ func (join *Join) handleEndOfRecordsMessage(clientId uint32) error {
 		return err
 	}
 	return nil
+}
+
+func (join *Join) Close() {
+	slog.Info("Closing join")
+	join.running.Store(false)
+
+	err := join.inputQueue.StopConsuming()
+	if err != nil && !errors.Is(err, middleware.ErrMessageMiddlewareDisconnected) {
+		slog.Error("While stopping input queue consumption", "err", err)
+	}
+
+	// Espero a que terminen de procesar los mensajes que estaban en curso
+	join.routines.Wait()
+
+	err = join.inputQueue.Close()
+	if err != nil && !errors.Is(err, middleware.ErrMessageMiddlewareDisconnected) {
+		slog.Error("While closing input queue", "err", err)
+	}
+	err = join.outputQueue.Close()
+	if err != nil && !errors.Is(err, middleware.ErrMessageMiddlewareDisconnected) {
+		slog.Error("While closing coordination exchange", "err", err)
+	}
 }
